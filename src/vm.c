@@ -229,15 +229,17 @@ allocuvm(pde_t *pgdir, uint oldsz, uint newsz)
   if(newsz < oldsz)
     return oldsz;
 
+  //creates a new page until the last page encompasses newsz address
   a = PGROUNDUP(oldsz);
   for(; a < newsz; a += PGSIZE){
-    mem = kalloc();
+    mem = kalloc(); //allocate a new page (returns the virtual address )
     if(mem == 0){
       cprintf("allocuvm out of memory\n");
       deallocuvm(pgdir, newsz, oldsz);
       return 0;
     }
-    memset(mem, 0, PGSIZE);
+    memset(mem, 0, PGSIZE); // clear page memory
+    //in pgdir, set the memory from a to a + PGSIZE as mapping to location at mem
     if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0){
       cprintf("allocuvm out of memory (2)\n");
       deallocuvm(pgdir, newsz, oldsz);
@@ -384,6 +386,41 @@ copyout(pde_t *pgdir, uint va, void *p, uint len)
   }
   return 0;
 }
+
+// int
+// km_allockvm(pde_t *pgdir, uint oldsz, uint newsz)
+// {
+//   char *mem;
+//   uint a;
+//   uint vdata = (uint)P2V(data);
+//   newsz += vdata;
+//   oldsz +=vdata;
+
+//   if(newsz >= PHYSTOP)
+//     return 0;
+//   if(newsz < oldsz)
+//     return oldsz;
+
+//   //creates a new page until the last page encompasses newsz address
+//   a = PGROUNDUP(oldsz);
+//   for(; a < newsz; a += PGSIZE){
+//     mem = kalloc(); //allocate a new page (returns the virtual address )
+//     if(mem == 0){
+//       cprintf("allockvm out of memory\n");
+//       deallocuvm(pgdir, newsz, oldsz);
+//       return 0;
+//     }
+//     memset(mem, 0, PGSIZE); // clear page memory
+//     //in pgdir, set the memory from a to a + PGSIZE as mapping to location at mem
+//     if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), 0) < 0){
+//       cprintf("allockvm out of memory (2)\n");
+//       deallocuvm(pgdir, newsz, oldsz);
+//       kfree(mem);
+//       return 0;
+//     }
+//   }
+//   return newsz - vdata;
+// }
 
 //PAGEBREAK!
 // Blank page.

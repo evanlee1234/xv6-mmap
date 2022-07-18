@@ -39,6 +39,7 @@ struct proc {
   uint sz;                     // Size of process memory (bytes)
   pde_t* pgdir;                // Page table
   char *kstack;                // Bottom of kernel stack for this process
+  uint ksz;                    // Size of kernel memory
   enum procstate state;        // Process state
   int pid;                     // Process ID
   struct proc *parent;         // Parent process
@@ -50,6 +51,14 @@ struct proc {
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
 };
+
+typedef struct mappedmem {
+  char * start_address;
+  uint   length;
+  int    region_type; //0 for anon, 1 for file backed
+  uint   offset;
+  int    fd;
+} Mmemblock;
 
 // Process memory is laid out contiguously, low addresses first:
 //   text

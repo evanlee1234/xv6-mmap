@@ -18,6 +18,8 @@ int nextpid = 1;
 extern void forkret(void);
 extern void trapret(void);
 
+extern char data[]; // defined by kernel.ld
+
 static void wakeup1(void *chan);
 
 void
@@ -111,6 +113,8 @@ found:
   p->context = (struct context*)sp;
   memset(p->context, 0, sizeof *p->context);
   p->context->eip = (uint)forkret;
+
+  p->ksz = 0; //added to set the kernel size..
 
   return p;
 }
@@ -531,4 +535,13 @@ procdump(void)
     }
     cprintf("\n");
   }
+}
+void *mmap(void *addr, int length, int prot, int flags, int fd,
+int offset){
+
+  return 0;
+}
+int munmap(void *addr, uint length){
+  
+  return 0;
 }
