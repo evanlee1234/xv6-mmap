@@ -1,0 +1,1309 @@
+diff -ruN src/defs.h src-finished/defs.h
+--- src/defs.h	2022-07-22 20:42:48.960969493 +0000
++++ src-finished/defs.h	2022-07-21 03:49:43.220266281 +0000
+@@ -9,6 +9,7 @@
+ struct sleeplock;
+ struct stat;
+ struct superblock;
++struct mappedmem;
+ 
+ // bio.c
+ void            binit(void);
+@@ -121,6 +122,12 @@
+ void            wakeup(void*);
+ void            yield(void);
+ 
++
++//mmap.c
++void *          mmap(void *, int, int, int, int, int);
++int             munmap(void *, uint);
++void            free_mapped_mem(struct mappedmem *);
++
+ // swtch.S
+ void            swtch(struct context**, struct context*);
+ 
+@@ -185,6 +192,9 @@
+ void            switchkvm(void);
+ int             copyout(pde_t*, uint, void*, uint);
+ void            clearpteu(pde_t *pgdir, char *uva);
++//kmalloc.c
++void*           kmalloc(uint);
++void            kmfree(void*);
+ 
+ // number of elements in fixed-size array
+ #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+diff -ruN src/kmalloc.c src-finished/kmalloc.c
+--- src/kmalloc.c	1970-01-01 00:00:00.000000000 +0000
++++ src-finished/kmalloc.c	2022-07-22 20:34:09.402831923 +0000
+@@ -0,0 +1,158 @@
++#include "types.h"
++#include "stat.h"
++#include "param.h"
++#include "mmu.h"
++#include "memlayout.h"
++#include "defs.h"
++#include "proc.h"
++
++// Memory allocator by Kernighan and Ritchie,
++// The C programming Language, 2nd ed.  Section 8.7.
++
++typedef long Align;
++
++//pretty much a linked list
++//ptr points to the next free header
++//should be thought of as <__SIZE__|__NEXT_PTR__>
++//where each part is 4 bytes long (1 int in size)
++
++union header {
++  struct {
++    union header *ptr;
++    uint size;
++  } s;
++  Align x;
++};
++extern char data[];  // defined by kernel.ld
++
++typedef union header Header;
++
++static Header kbase; //pointer to beginning of the space
++static Header *kfreep; //pointer to the end of the space allocated (all memory past this is unallocated)
++
++int km_allockvm(pde_t *pgdir, uint oldsz, uint newsz);
++void* kmalloc(uint nbytes);
++void kmfree(void *ap);
++static Header* km_morecore(uint nu);
++int km_sbrk(int n);
++int km_growproc(int n);
++
++
++void*
++kmalloc(uint nbytes)
++{
++  // cprintf("TEST!");
++  Header *p, *prevp;
++  uint nunits;
++  nunits = (nbytes + sizeof(Header) - 1)/sizeof(Header) + 1;
++  //initial case, kfreep == 0... should only happen on initial use
++  //set the kbase pointer's s to the location of kbase 
++  //also sets the pointer's kfreep and prevp to location of kbase,
++  //meaning that their s.ptrs also point to memory location of kbase
++  if((prevp = kfreep) == 0){
++    kbase.s.ptr = kfreep = prevp = &kbase;
++    kbase.s.size = 0;
++  }
++  //iterates by moving headers from the intial pointer place,
++  //then setting p to the pointer of s.ptr, which is equivalent to
++  //pointing p to the next header position
++  for(p = prevp->s.ptr; ; prevp = p, p = p->s.ptr){
++    //if there's no need to allocate more memory (since the current header
++    // can fit more data here)
++    // cprintf("P: %d %x\n", p->s.size, p->s.ptr);
++    if(p->s.size >= nunits){
++      if(p->s.size == nunits)
++        prevp->s.ptr = p->s.ptr; //perfectly fits, so use this block, removing this current location from the linked list
++      else {
++        //otherwise break up this header into two parts, one for the nunits size
++        //and the other for the remainder, which looks like:
++        //<orig_size|orig_nextpointer>[orig_size_in_space] ->
++        // <orig_size - nunits|orig_nextpointer>[orig_size - nunits_in_space]&<nunits|.....>[n_units]
++        // thus the free block is shortened and the used block is not added to the linked list
++        p->s.size -= nunits;
++        p += p->s.size;
++        p->s.size = nunits;
++      }
++      kfreep = prevp; //kfreep now points to the previous node in linked list 
++      // cprintf("About to return %x\n",p + 1 );
++      return (void*)(p + 1); //point to the actual data area
++    }
++    //if the pointers are equivalent (means that all allocated space is filled)
++    if(p == kfreep){
++      if((p = km_morecore(nunits)) == 0) {
++        //request more space for (n units)
++        // cprintf("Error creating memory\n");
++        return 0;
++      }
++    }
++    
++    // cprintf("Finished loop round\n");
++  }
++  // cprintf("Exiting kmalloc\n");
++}
++
++void
++kmfree(void *ap)
++{
++  Header *bp, *p;
++  // cprintf("Trying to free memory\n");
++
++  bp = (Header*)ap - 1; // move to see the header info
++  //continue until bp is in between p and the next node after p
++  //this condition only handles intermediate, the if condition below handles 
++  //the condition for bp being at the beginning or end (returns p as the last value in the linked list)
++  for(p = kfreep; !(bp > p && bp < p->s.ptr); p = p->s.ptr)
++  //if p is after the next node in ll and bp is either after p or before the next node
++  //meaning that we've traversed to the end (where the next free list value is the beginning of the linked list)
++  //and that the to-be free node is either after p (meaning it's the last possible value) or that bp is before both p and the next node
++  //meaning that it's before the beginning of the linked list? (need to confirm)
++    if(p >= p->s.ptr && (bp > p || bp < p->s.ptr))
++      break;
++  //thus p either points to the last node (if the linked list's range does not contain bp)
++  //or the intermediary node right before bp
++
++  //if the bp chunk is contiguous with the next free block, merge the next block
++  //into the bp chunk, otherwise set bp to point to the next value in the linked list
++  //should only happen if bp can be placed in an intermediate position in the linked list
++  if(bp + bp->s.size == p->s.ptr){
++    bp->s.size += p->s.ptr->s.size;
++    bp->s.ptr = p->s.ptr->s.ptr;
++  } else
++    bp->s.ptr = p->s.ptr; 
++
++  //if the free block before bp is contiguous to bp, merge bp into free block,
++  //otherwise just add bp the the linked list
++  if(p + p->s.size == bp){
++    p->s.size += bp->s.size;
++    p->s.ptr = bp->s.ptr;
++  } else
++    p->s.ptr = bp;
++  kfreep = p; //now the kfreep points to node right before bp (if it is within the linked list range), otherwise the last pointer in linked list
++  // cprintf("Should be unallocated\n");
++}
++
++//generates more memory as needed,
++//but is limited 
++static Header*
++km_morecore(uint nu)
++{
++  char *p;
++  Header *hp;
++
++  if(nu < PGSIZE - sizeof(Header))
++    nu = PGSIZE - sizeof(Header);
++  if (nu > PGSIZE - sizeof(Header))
++    panic("Kernel cannot allocate more than 4096 bytes per malloc request\n");
++  //nu is the size of memory to add (which is at least 1 page (4096 kb))
++  //nu * sizeof(header) is the amount of memory added
++  // p = (char*) km_sbrk(nu * sizeof(Header)); // returns either -1 or the value of the address of the size needed 
++  p = kalloc();
++  // cprintf("RETURNED from request %x\n",p);
++  if(p == 0) // value for -1 in unsigned
++    return 0;
++  hp = (Header*)p; //p is the address of the new allocated amount of memory
++  hp->s.size = PGSIZE - sizeof(Header);
++  kmfree((void*)(hp + 1)); 
++  // cprintf("%x\n",kfreep);
++  return kfreep;
++}
+\ No newline at end of file
+diff -ruN src/Makefile src-finished/Makefile
+--- src/Makefile	2022-07-22 20:42:49.992973347 +0000
++++ src-finished/Makefile	2022-07-21 05:53:00.702815485 +0000
+@@ -27,6 +27,8 @@
+ 	uart.o\
+ 	vectors.o\
+ 	vm.o\
++	kmalloc.o\
++	mmap.o\
+ 
+ # Cross-compiling (e.g., on Mac OS X)
+ # TOOLPREFIX = i386-jos-elf
+@@ -250,7 +252,7 @@
+ EXTRA=\
+ 	mkfs.c ulib.c user.h cat.c echo.c forktest.c grep.c kill.c\
+ 	ln.c ls.c mkdir.c rm.c stressfs.c usertests.c wc.c zombie.c\
+-	printf.c umalloc.c\
++	printf.c umalloc.c kmalloc.c test_1.c\
+ 	README dot-bochsrc *.pl toc.* runoff runoff1 runoff.list\
+ 	.gdbinit.tmpl gdbutil\
+ 
+diff -ruN src/Makefile.test src-finished/Makefile.test
+--- src/Makefile.test	2022-07-22 20:42:49.200970389 +0000
++++ src-finished/Makefile.test	2022-07-22 20:40:13.480379246 +0000
+@@ -27,6 +27,8 @@
+ 	uart.o\
+ 	vectors.o\
+ 	vm.o\
++	kmalloc.o\
++	mmap.o\
+ 
+ # Cross-compiling (e.g., on Mac OS X)
+ # TOOLPREFIX = i386-jos-elf
+@@ -181,7 +183,6 @@
+ 	_test_5\
+ 	_test_6\
+ 	_test_7\
+-	_test_8\
+ 	_mkdir\
+ 	_rm\
+ 	_sh\
+@@ -258,7 +259,7 @@
+ EXTRA=\
+ 	mkfs.c ulib.c user.h cat.c echo.c forktest.c grep.c kill.c\
+ 	ln.c ls.c mkdir.c rm.c stressfs.c usertests.c wc.c zombie.c\
+-	printf.c umalloc.c\
++	printf.c umalloc.c kmalloc.c test_1.c\
+ 	README dot-bochsrc *.pl toc.* runoff runoff1 runoff.list\
+ 	.gdbinit.tmpl gdbutil\
+ 
+diff -ruN src/mmap.c src-finished/mmap.c
+--- src/mmap.c	1970-01-01 00:00:00.000000000 +0000
++++ src-finished/mmap.c	2022-07-22 20:40:25.852431587 +0000
+@@ -0,0 +1,370 @@
++#include "types.h"
++#include "x86.h"
++#include "defs.h"
++#include "param.h"
++#include "memlayout.h"
++#include "mmu.h"
++#include "proc.h"
++
++void set_memblock(mem_block * block,void *addr, int length, int prot, int flags, int fd, int offset, int used, mem_block * next){
++    if (block == 0){
++        return;
++    }
++    block->fd= fd;
++    block->length = length;
++    block->offset = offset;
++    block->region_type = fd== -1? 0: 1;
++    block->start_address = addr;
++    block->used = used;
++    block->next = next;
++    block->flags = flags;
++    block->prot = prot;
++    memset(addr,0,length);
++}
++void print_memblock(mem_block* block){
++    if (block != 0)
++    cprintf("Memblock: addr: %x\tlength: %d\tused: %d\tnext: %x\n",
++            block->start_address,block->length,block->used,block->next);
++}
++
++void print_all_memblocks(mem_block * root){
++  mem_block * cur= root;
++  while (cur != 0){
++    print_memblock(cur);
++    cur = cur->next;
++  }
++}
++
++
++mem_block * copy_memblock(mem_block * orig){
++    mem_block * copy = kmalloc(sizeof(mem_block));
++    if (copy ==0){
++        return 0;
++    }
++    copy->start_address = orig->start_address;
++    copy->length = orig->length;
++    copy->capacity = orig->capacity;
++    copy->region_type = orig->region_type;
++    copy->offset = orig->offset;
++    copy->fd = orig->fd;
++    copy->used = orig->used;      
++    copy->flags = orig->flags;
++    copy->prot = orig->prot; 
++    copy->next = orig->next;
++    return copy;
++}
++
++mem_block * init_memblock(void *addr, int length, int prot, int flags, int fd, int offset){
++    mem_block * block = kmalloc(sizeof(mem_block));
++    if (block ==0){
++        return 0;
++    }
++    set_memblock(block,addr, length, prot, flags, fd, offset,1,0);
++    block->capacity = length;
++    return block;
++}
++mem_block * init_free_memblock(void * addr, int length){
++    mem_block * block = kmalloc(sizeof(mem_block));
++    if (block ==0){
++        return 0;
++    }
++    set_memblock(block, addr,length,0,0,0,0,0,0);
++    block->capacity = length;
++    return block;
++}
++
++int abs(int x){
++    if (x < 0){
++        return -x;
++    }
++    return x;
++}
++
++mem_block * lastblock(mem_block * root){
++    if (root == 0){
++        return 0;
++    }
++    if (root->next == 0){
++        return root;
++    }
++    return lastblock(root->next);
++}
++
++int try_free_lastblock(struct proc * curproc){
++    // cprintf("Entering free last block\n");
++    uint sz;
++    mem_block * last = lastblock(curproc->mapped_mem);
++    // print_all_memblocks(curproc->mapped_mem);
++    // print_memblock(last);
++    if (last == 0){
++        return 0;
++    }
++    // cprintf("HERE\n");
++    mem_block * prev =0;
++    if (curproc->mapped_mem != last){
++      // cprintf("allocating for prev?\n");
++      for(prev = curproc->mapped_mem; prev != 0 && prev->next != last; prev = prev->next); 
++    }
++    if (prev != 0 && prev->next != last){
++        cprintf("failed to get node prior to last\n");
++    }
++    // cprintf("reached here\n");
++    //if free mem, should already be unallocated.
++    if (last->used == 0 && last->capacity + (uint) last->start_address == curproc->sz){
++        // cprintf("Unallocating last proc: ");
++        // print_memblock(last);
++        sz = (uint) last->start_address;
++        if (prev == 0){
++            curproc->mapped_mem = 0;
++        }else{
++            prev->next = 0;
++        }
++        kmfree(last);
++        curproc->sz = sz;
++        switchuvm(curproc);
++    }
++    // cprintf("Exiting attempt to free last block\n");
++    return 0;
++}
++
++uint max(uint a, uint b){
++    return a >= b ? a : b;
++}
++
++uint find_closest_addr(void * addr, uint length, mem_block * root, mem_block ** closest_block, int any_valid, uint cur_sz){
++    mem_block *cur = root;
++    uint temp_addr;
++    int break_while = 0;
++    uint closest_addr=0;
++    uint aligned_addr =((uint)addr % PGSIZE >= PGSIZE/2 ? PGROUNDUP((uint)addr) : PGROUNDDOWN((uint) addr));
++    
++    while(cur != (mem_block *) 0){
++        if (cur->used == 0 && cur->length >= length){
++            if (any_valid){
++                //just find the first suitable one...
++                *closest_block = cur;
++                closest_addr = (uint) cur->start_address;
++                break;
++            }
++            if (closest_block == 0){ //for initialization purposes
++                *closest_block = cur;
++                closest_addr = (uint) cur->start_address;
++            }
++            //check within each block the optimal position for the position
++            //assuming that cur->start_address will always be page aligned
++            for(temp_addr = (uint) cur->start_address; temp_addr + length <=  (uint) cur->start_address + cur->length; temp_addr += PGSIZE){
++                //if the temp addr is further away than the best addr so far, there's no need to continue since
++                //that implies the requested address is behind
++                if ((uint)temp_addr % PGSIZE!= 0){
++                    cprintf("Somehow not aligned for temp_addr!\n");
++                }
++                if (abs(temp_addr - aligned_addr) > abs(closest_addr - aligned_addr)){
++                    break_while = 1;
++                    break;
++                }   
++                closest_addr = temp_addr;
++                *closest_block = cur;
++            }
++            if (break_while){
++                break;
++            }
++        }
++        cur = cur->next;
++    }
++    if (*closest_block == 0 || abs(PGROUNDUP(cur_sz) - (uint)aligned_addr) < abs((uint) closest_addr - (uint)aligned_addr)){
++        //will allocate on top...
++        closest_addr =  max(PGROUNDUP(cur_sz), (uint) aligned_addr);
++        *closest_block = 0;
++    }
++    // cprintf("returning closest_addr: %d\n",closest_addr);
++    return (uint) closest_addr; 
++}
++
++void free_mapped_mem(mem_block * node){
++
++    if (node == 0){
++        return;
++    }
++    if (node->used){
++        cprintf("somehow node was still being mapped?\n");
++    }
++    free_mapped_mem(node->next);
++    kmfree(node);
++    // cprintf("Is this the issue?\n");
++}
++
++//linkedlist must always be sorted 
++void * mmap(void *addr, int length, int prot, int flags, int fd, int offset){
++    // return 0;
++    struct proc * curproc = myproc();
++    try_free_lastblock(curproc);//in case there's any new blocks to free
++
++    mem_block * last = lastblock(curproc->mapped_mem); //last block 
++    uint sz = curproc->sz;
++    uint rounded_sz = PGROUNDUP(sz);
++    int any_valid = addr == 0 ? 1 : 0; // used to check if any thing will do
++    
++
++    if ((int) addr < 0 || (int) addr >= KERNBASE || length <=0)
++    {
++        return (void *) -1;
++    }
++    mem_block * closest_block = 0;    //used for identifing the closest block
++    uint closest_addr = find_closest_addr(addr,length,curproc->mapped_mem,&closest_block, any_valid, sz);   //used to break up blocks if necessary
++
++    //if need to allocate more memory
++    if (closest_addr >= rounded_sz){
++        uint freespace = closest_addr - rounded_sz;
++        uint prev_sz = sz;
++        if ((sz = allocuvm(curproc->pgdir,curproc->sz, closest_addr + length))==0){
++            return (void *) -1;
++        }
++        if (freespace % PGSIZE != 0){
++            cprintf("SHOULD BE AN ERROR (the data should always be page-aligned)!\n");
++        }
++        if ((closest_block = init_memblock((void *) closest_addr, length, prot, flags, fd, offset))==0){
++            deallocuvm(curproc->pgdir,closest_addr + length, prev_sz);
++            return (void *) -1;
++        }
++        mem_block * temp = closest_block;
++        if (freespace != 0){
++            mem_block * freeblock = init_free_memblock((void *) prev_sz,freespace);
++            
++            if (freeblock == 0){
++                kmfree(closest_block);
++                deallocuvm(curproc->pgdir,closest_addr + length, prev_sz);
++                return (void *) -1;
++            }
++            deallocuvm(curproc->pgdir,prev_sz + freespace, prev_sz); //deallocate free block
++            freeblock->next = closest_block;
++            temp = freeblock;
++        }
++        if (last == 0){
++            curproc->mapped_mem = temp;
++        }else{
++            last->next = temp;
++        }
++    }else{
++        if (closest_block == 0){
++            cprintf("ERROR: SHOULD HAVE FOUND A VALID BLOCK\n");
++        }
++        //reuse previous freed memory
++        int old_len = closest_block->length;
++        mem_block * old_nex = closest_block->next;
++        uint block_end = PGROUNDUP((uint)closest_addr + length);
++        int pre_space = closest_addr - (uint)closest_block->start_address; // guaranteed to be aligned by PGSIZE
++        int post_space = ((uint) closest_block->start_address + closest_block->length) - block_end;
++        int capacity = block_end - (uint) closest_addr; // guaranteed to be aligned by PGSIZE
++        mem_block * inner, *post, * prev;
++        inner = post = 0;
++        prev = closest_block;
++
++        if (pre_space % PGSIZE != 0 ){
++            // cprintf("ERROR WITH either cur_best_addr or the mem blocks: %x %x %x %x\n",closest_addr,length, closest_block->start_address, closest_block->length);
++            return (void *) -1;
++        }
++        if (post_space > 0){
++            post = init_free_memblock((void *)block_end,post_space);
++            if (post == 0){
++                return (void *) -1;
++            }
++            post->next = closest_block->next; 
++            closest_block->length = length;
++            closest_block->capacity = capacity;
++            closest_block->next = post;
++            try_free_lastblock(curproc);//check to see if post can be freed completely (will only happen if post is the last block)
++        }
++        if (pre_space > 0){
++            inner = init_memblock((void *)closest_addr,length,prot,flags,fd, offset);
++            if (inner == 0){
++                if (post != 0){
++                    kmfree(post);
++                    closest_block->length = old_len;
++                    closest_block->next = old_nex;
++                }
++                return (void *) -1;
++            }
++            closest_block->length = pre_space;
++            closest_block->capacity = pre_space; 
++            inner->capacity = capacity;
++            inner->next = closest_block->next; 
++            closest_block->next = inner;
++            closest_block = inner;
++        }
++        if (allocuvm(curproc->pgdir,(uint) closest_block->start_address,(uint) closest_block->start_address + closest_block->length)==0){
++            if (inner != 0){
++                closest_block = prev;
++                closest_block->next = inner->next;
++                closest_block->capacity += capacity;
++                closest_block->length = closest_block->capacity;
++                kmfree(inner);
++            }
++            if (post != 0){
++                closest_block->next = post->next;
++                closest_block->capacity += post_space;
++                closest_block->length = closest_block->capacity;
++                kmfree(post);
++            }
++            // cprintf("Error trying to break up memory...\n");
++            return (void *) -1;
++        }
++        set_memblock(closest_block,closest_block->start_address,closest_block->length,prot,flags,fd,offset,1,closest_block->next);
++    }
++    curproc->sz = sz;
++    switchuvm(curproc);
++    // print_all_memblocks(curproc->mapped_mem);
++    return (void *) closest_block->start_address;
++}
++int munmap(void *addr, uint length){
++    if ((int) addr < 0 || (int) addr >= KERNBASE || length <=0)
++    {
++        return -1;
++    }
++    
++    struct proc * curproc = myproc();
++    mem_block * root = curproc->mapped_mem;
++    mem_block * cur, *prev;
++    uint sz = curproc->sz;
++
++    // cprintf("Unmapping\n");
++
++    prev = 0;
++    for(cur = root; cur != 0 && !(cur->start_address == addr && cur->length == length); prev = cur, cur = cur->next);
++    if( cur == 0){
++        return -1;
++    }
++    cur->length = cur->capacity;
++    //free from the top of the stack if it's last   
++    set_memblock(cur,cur->start_address, cur->length,0,0,0,0,0,cur->next);
++    // cprintf("Finished setting mem...");
++    sz = deallocuvm(curproc->pgdir,(uint) cur->start_address + cur->length,(uint) cur->start_address);
++    if (sz == 0){
++        return -1;
++    }
++    // cprintf("finished deallocating\n");
++    //merge with previous node
++    if (prev != 0 && prev->used == 0 && prev->start_address + prev->capacity == cur->start_address){
++        // cprintf("merging with previous node\n");
++        int capacity = cur->capacity;
++        prev->length += capacity;
++        prev->capacity += capacity;
++        prev->next = cur->next;
++        kmfree(cur);
++        cur = prev;
++        for(prev = root; prev != 0 && prev->next != cur; prev = prev->next); // set prev to before cur
++    }
++    //merge with next node
++    if (cur->next != 0 && cur->next->used == 0 &&
++        cur->capacity + cur->start_address == cur->next->start_address){
++        // cprintf("merging with next node\n");
++        mem_block * next = cur->next;
++        int capacity = next->capacity;
++        cur->length += capacity;
++        cur->capacity += capacity;
++        cur->next = next->next;
++        kmfree(next);
++    }    
++    //only truly release memory if it's available
++    try_free_lastblock(curproc);
++    return 0;
++}
+\ No newline at end of file
+diff -ruN src/proc.c src-finished/proc.c
+--- src/proc.c	2022-07-22 20:42:54.556990397 +0000
++++ src-finished/proc.c	2022-07-22 20:38:46.740011926 +0000
+@@ -18,6 +18,8 @@
+ extern void forkret(void);
+ extern void trapret(void);
+ 
++extern char data[]; // defined by kernel.ld
++
+ static void wakeup1(void *chan);
+ 
+ void
+@@ -112,6 +114,9 @@
+   memset(p->context, 0, sizeof *p->context);
+   p->context->eip = (uint)forkret;
+ 
++  p->ksz = 0; //added to set the kernel size..
++  p->mapped_mem = (mem_block *) 0; 
++
+   return p;
+ }
+ 
+@@ -200,6 +205,8 @@
+   np->parent = curproc;
+   *np->tf = *curproc->tf;
+ 
++  np->mapped_mem = curproc->mapped_mem;
++
+   // Clear %eax so that fork returns 0 in the child.
+   np->tf->eax = 0;
+ 
+@@ -531,4 +538,4 @@
+     }
+     cprintf("\n");
+   }
+-}
++}
+\ No newline at end of file
+diff -ruN src/proc.h src-finished/proc.h
+--- src/proc.h	2022-07-22 20:42:49.432971256 +0000
++++ src-finished/proc.h	2022-07-21 04:07:06.177482313 +0000
+@@ -34,11 +34,26 @@
+ 
+ enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+ 
++
++typedef struct mappedmem {
++  void * start_address;
++  uint   length;
++  uint   capacity;
++  int    region_type; //0 for anon, 1 for file backed
++  uint   offset;
++  int    fd;
++  int    used;        //0 for unused (free), 1 for used
++  uint   flags;
++  uint   prot; 
++  struct mappedmem * next;
++} mem_block;
++
+ // Per-process state
+ struct proc {
+   uint sz;                     // Size of process memory (bytes)
+   pde_t* pgdir;                // Page table
+   char *kstack;                // Bottom of kernel stack for this process
++  uint ksz;                    // Size of kernel memory
+   enum procstate state;        // Process state
+   int pid;                     // Process ID
+   struct proc *parent;         // Parent process
+@@ -49,8 +64,10 @@
+   struct file *ofile[NOFILE];  // Open files
+   struct inode *cwd;           // Current directory
+   char name[16];               // Process name (debugging)
++  mem_block * mapped_mem;      // used for holding memblocks
+ };
+ 
++
+ // Process memory is laid out contiguously, low addresses first:
+ //   text
+ //   original data and bss
+diff -ruN src/syscall.c src-finished/syscall.c
+--- src/syscall.c	2022-07-22 20:42:52.372982237 +0000
++++ src-finished/syscall.c	2022-07-18 03:40:38.507924727 +0000
+@@ -103,6 +103,10 @@
+ extern int sys_wait(void);
+ extern int sys_write(void);
+ extern int sys_uptime(void);
++extern int sys_kmalloc(void);
++extern int sys_kmfree(void);
++extern int sys_mmap(void);
++extern int sys_munmap(void);
+ 
+ static int (*syscalls[])(void) = {
+ [SYS_fork]    sys_fork,
+@@ -126,6 +130,11 @@
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++//testing
++[SYS_kmalloc] sys_kmalloc,
++[SYS_kmfree]  sys_kmfree,
++[SYS_mmap]    sys_mmap,
++[SYS_munmap]  sys_munmap,
+ };
+ 
+ void
+diff -ruN src/syscall.h src-finished/syscall.h
+--- src/syscall.h	2022-07-22 20:42:55.792995018 +0000
++++ src-finished/syscall.h	2022-07-18 03:40:57.076013347 +0000
+@@ -20,3 +20,8 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++//For testing purposes
++#define SYS_kmalloc  22
++#define SYS_kmfree   23
++#define SYS_mmap     24
++#define SYS_munmap   25
+diff -ruN src/sysproc.c src-finished/sysproc.c
+--- src/sysproc.c	2022-07-22 20:42:49.120970091 +0000
++++ src-finished/sysproc.c	2022-07-18 03:54:26.411661215 +0000
+@@ -48,9 +48,9 @@
+   int addr;
+   int n;
+ 
+-  if(argint(0, &n) < 0)
++  if(argint(0, &n) < 0) // checks to make sure the size is >= 0
+     return -1;
+-  addr = myproc()->sz;
++  addr = myproc()->sz; //sz is the last point being pointed at (can be thought of as keeping track of how much memory is already allocated (since sz starts at 0 in address space))
+   if(growproc(n) < 0)
+     return -1;
+   return addr;
+@@ -89,3 +89,49 @@
+   release(&tickslock);
+   return xticks;
+ }
++
++int
++sys_kmalloc(void)
++{
++  int n;
++
++  if(argint(0, &n) < 0)
++    return -1;
++
++  return (int) kmalloc((uint) n);
++}
++
++int
++sys_kmfree(void)
++{
++  int ptr;
++
++  if(argint(0, &ptr) < 0)
++    return -1;
++  kmfree((void *) ptr);
++  return 0;
++}
++
++int sys_mmap(void){
++  int addr, length, prot, flags, fd, offset;
++
++  if (argint(0, &addr)< 0 || 
++      argint(1, &length)< 0 ||
++      argint(2, &prot)< 0 ||
++      argint(3, &flags)< 0 ||
++      argint(4, &fd)< 0 ||
++      argint(5, &offset)< 0)
++      return -1;
++  return (int) mmap((void *) addr, length, prot, flags, fd,offset);
++}
++
++int sys_munmap(void){
++  int addr,length;
++    if (argint(0, &addr)< 0 || 
++      argint(1, &length)< 0){
++        return -1;
++      }
++  
++  return munmap((void *) addr, (uint) length);
++
++}
+\ No newline at end of file
+diff -ruN src/test_1.c src-finished/test_1.c
+--- src/test_1.c	1970-01-01 00:00:00.000000000 +0000
++++ src-finished/test_1.c	2022-07-22 20:40:13.484379264 +0000
+@@ -0,0 +1,32 @@
++#include "param.h"
++#include "types.h"
++#include "stat.h"
++#include "user.h"
++#include "fs.h"
++#include "fcntl.h"
++#include "syscall.h"
++#include "traps.h"
++#include "memlayout.h"
++
++
++int
++main(int argc, char *argv[])
++{
++  int i;
++  for(i=1;i<=500;i++)
++  {
++    void* addr = kmalloc(2000);
++
++    if(addr == 0)
++    {
++      printf(1, "XV6_TEST_OUTPUT : kmalloc failed to allocate memory\n");
++      exit();
++    }
++
++    kmfree(addr);
++  }
++
++  printf(1, "XV6_TEST_OUTPUT : kmalloc  and kmfree good.\n");
++
++  exit();
++}
+diff -ruN src/test_2.c src-finished/test_2.c
+--- src/test_2.c	1970-01-01 00:00:00.000000000 +0000
++++ src-finished/test_2.c	2022-07-22 20:40:13.492379298 +0000
+@@ -0,0 +1,73 @@
++#include "param.h"
++#include "types.h"
++#include "stat.h"
++#include "user.h"
++#include "fs.h"
++#include "fcntl.h"
++#include "syscall.h"
++#include "traps.h"
++#include "memlayout.h"
++
++/*Test simple mmap and munmap.
++Test mmap has zeroed the newly mapped anonymous region.*/
++int
++memcmp(const void *v1, const void *v2, uint n)
++{
++  const uchar *s1, *s2;
++  
++  s1 = v1;
++  s2 = v2;
++  while(n-- > 0)
++  {
++    if(*s1 != *s2)
++     return *s1 - *s2;
++
++    s1++, s2++;
++  }
++
++  return 0;
++}
++
++void test() {
++  int size =  10;
++  void *zeroes;
++
++  void* res=0;
++  res = mmap(res, size, 0/*prot*/, 0/*flags*/, -1/*fd*/, 0/*offset*/);
++  if (res<=0)
++  {
++    printf(1, "XV6_TEST_OUTPUT : mmap failed\n");
++    return;
++  }
++
++  printf(1, "XV6_TEST_OUTPUT : mmap good\n");
++  zeroes = malloc(size);
++  memset(zeroes, 0, size);
++
++  int ret = memcmp(res, zeroes, size);
++  printf(1, "XV6_TEST_OUTPUT : Ret of memcmp %d\n", ret);
++
++  if (ret != 0) {
++    printf(1, "XV6_TEST_OUTPUT : mmap() should zero out the  newly mapped anonymous memory region.!!\n");
++    return;
++  }
++
++  printf(1, "XV6_TEST_OUTPUT : mmap() has correctly cleared the newly mapped anonymous memory region\n");
++
++  int rv = munmap(res, size);
++  if (rv < 0) {
++    printf(1, "XV6_TEST_OUTPUT : munmap failed\n");
++    return;
++  }
++
++  printf(1, "XV6_TEST_OUTPUT : munmap good\n");
++  return;
++}
++
++
++int
++main(int argc, char *argv[])
++{
++  test();
++  exit();
++}
+diff -ruN src/test_3.c src-finished/test_3.c
+--- src/test_3.c	1970-01-01 00:00:00.000000000 +0000
++++ src-finished/test_3.c	2022-07-22 20:40:13.496379314 +0000
+@@ -0,0 +1,66 @@
++#include "param.h"
++#include "types.h"
++#include "stat.h"
++#include "user.h"
++#include "fs.h"
++#include "fcntl.h"
++#include "syscall.h"
++#include "traps.h"
++#include "memlayout.h"
++
++/* Test modification to memory mapped by mmap.*/
++int
++memcmp(const void *v1, const void *v2, uint n)
++{
++  const uchar *s1, *s2;
++  
++  s1 = v1;
++  s2 = v2;
++  while(n-- > 0)
++  {
++    if(*s1 != *s2)
++     return *s1 - *s2;
++
++    s1++, s2++;
++  }
++
++  return 0;
++}
++
++void test() {
++  int size =  10;  /* we need 10 bytes */
++ 
++  char *addr = (char*)0x4000;
++  char* str = mmap(addr, size,  0/*prot*/, 0/*flags*/, -1/*fd*/, 0/*offset*/);
++
++  if (str<=0)
++  {
++    printf(1, "XV6_TEST_OUTPUT : mmap failed\n");
++    return;
++  }
++
++  printf(1, "XV6_TEST_OUTPUT : mmap good\n");
++
++  printf(1, "XV6_TEST_OUTPUT : Strlen Before modification: %d\n", strlen((char*)str));
++
++  strcpy(str, "012345");
++
++  printf(1, "XV6_TEST_OUTPUT : str = %s\n", (char*)str);
++  printf(1, "XV6_TEST_OUTPUT : Strlen After modification: %d\n", strlen((char*)str));
++
++  int rv = munmap(str, size);
++  if (rv < 0) {
++    printf(1, "XV6_TEST_OUTPUT : munmap failed\n");
++    return;
++  }
++
++  printf(1, "XV6_TEST_OUTPUT : munmap good\n");
++  return;
++}
++
++int
++main(int argc, char *argv[])
++{
++  test();
++  exit();
++}
+diff -ruN src/test_4.c src-finished/test_4.c
+--- src/test_4.c	1970-01-01 00:00:00.000000000 +0000
++++ src-finished/test_4.c	2022-07-22 20:40:13.504379348 +0000
+@@ -0,0 +1,48 @@
++#include "param.h"
++#include "types.h"
++#include "stat.h"
++#include "user.h"
++#include "fs.h"
++#include "fcntl.h"
++#include "syscall.h"
++#include "traps.h"
++#include "memlayout.h"
++
++/*Stress test : Testing modification to anonymous memory mapped by mmap in a loop.*/
++void test() {
++  int size =  10;  /* we need 10 bytes */
++ 
++  char *addr = (char*)0x4000;
++  char* str = mmap(addr, size,  0/*prot*/, 0/*flags*/, -1/*fd*/, 0/*offset*/);
++
++  if (str<=0)
++  {
++    printf(1, "XV6_TEST_OUTPUT : mmap failed\n");
++    return;
++  }
++
++  strcpy(str, "012345");
++
++  printf(1, "XV6_TEST_OUTPUT : str = %s\n", (char*)str);
++
++  int rv = munmap(str, size);
++  if (rv < 0) {
++    printf(1, "XV6_TEST_OUTPUT : munmap failed\n");
++    return;
++  }
++
++  return;
++}
++
++int
++main(int argc, char *argv[])
++{
++  int i;
++
++  for(i=1;i<=100;i++)
++  {
++    test();
++  }
++  
++  exit();
++}
+diff -ruN src/test_5.c src-finished/test_5.c
+--- src/test_5.c	1970-01-01 00:00:00.000000000 +0000
++++ src-finished/test_5.c	2022-07-22 20:40:13.512379382 +0000
+@@ -0,0 +1,60 @@
++#include "param.h"
++#include "types.h"
++#include "stat.h"
++#include "user.h"
++#include "fs.h"
++#include "fcntl.h"
++#include "syscall.h"
++#include "traps.h"
++#include "memlayout.h"
++#include "mmu.h"
++
++
++/*Testing whether address returned by anonymous mmap is page aligned.*/
++int
++main(int argc, char *argv[])
++{
++  int size = 200;
++  char *r1 = mmap(0, size, 0/*prot*/, 0/*flags*/, -1/*fd*/, 0/*offset*/);
++
++  char *r2 = mmap(0, size, 0/*prot*/, 0/*flags*/, -1/*fd*/, 0/*offset*/);
++
++  char *r3 = mmap(0, size, 0/*prot*/, 0/*flags*/, -1/*fd*/, 0/*offset*/);
++
++  int rem1 = ((int)r1 % PGSIZE);
++  int rem2 = ((int)r2 % PGSIZE);
++  int rem3 = ((int)r3 % PGSIZE);
++
++  printf(1, "XV6_TEST_OUTPUT : rem1 = %d rem2 = %d rem3 = %d\n",rem1,rem2,rem3);
++
++  if(rem1 != 0 || rem2 != 0 || rem3 != 0)
++  {
++    printf(1, "XV6_TEST_OUTPUT : Address returned by mmap should be page aligned\n");
++    exit();
++  }
++
++  printf(1, "XV6_TEST_OUTPUT : mmap good --> address returned is page aligned\n");
++
++  int rv1 = munmap(r1, size);
++  if (rv1 < 0) {
++    printf(1, "XV6_TEST_OUTPUT : munmap failed\n");
++    exit();
++  }
++
++  int rv2 = munmap(r2, size);
++  if (rv2 < 0) {
++    printf(1, "XV6_TEST_OUTPUT : munmap failed\n");
++    exit();
++  }
++
++
++  int rv3 = munmap(r3, size);
++  if (rv3 < 0) {
++    printf(1, "XV6_TEST_OUTPUT : munmap failed\n");
++    exit();
++  }
++  
++  printf(1, "XV6_TEST_OUTPUT : munmap good\n");
++
++  exit();
++}
+diff -ruN src/test_6.c src-finished/test_6.c
+--- src/test_6.c	1970-01-01 00:00:00.000000000 +0000
++++ src-finished/test_6.c	2022-07-22 20:40:13.516379399 +0000
+@@ -0,0 +1,45 @@
++#include "param.h"
++#include "types.h"
++#include "stat.h"
++#include "user.h"
++#include "fs.h"
++#include "fcntl.h"
++#include "syscall.h"
++#include "traps.h"
++#include "memlayout.h"
++#include "mmu.h"
++
++
++/*Stress Testing allocating large sized memory using anonymous mmap in a loop..*/
++int
++main(int argc, char *argv[])
++{
++  int i;
++  for(i = 0;i<100;i++)
++  {
++    int size =  2100;
++    int modifySize = 2000;
++ 
++    char *addr = (char*)0x4000;
++    char* r = mmap(addr, size,  0/*prot*/, 0/*flags*/, -1/*fd*/, 0/*offset*/);
++
++    if (r<=0)
++    {
++      printf(1, "XV6_TEST_OUTPUT : mmap failed\n");
++      exit();
++    }
++    
++    memset(r, 'a', modifySize);
++    printf(1, "XV6_TEST_OUTPUT : strlen(r) = %d\n", strlen(r));
++
++    int rv = munmap(r, size);
++    if (rv < 0) 
++    {
++      printf(1, "XV6_TEST_OUTPUT : munmap failed\n");
++      exit();
++    }
++
++  }
++
++  exit();
++}
+diff -ruN src/test_7.c src-finished/test_7.c
+--- src/test_7.c	1970-01-01 00:00:00.000000000 +0000
++++ src-finished/test_7.c	2022-07-22 20:40:13.524379433 +0000
+@@ -0,0 +1,44 @@
++#include "param.h"
++#include "types.h"
++#include "stat.h"
++#include "user.h"
++#include "fs.h"
++#include "fcntl.h"
++#include "syscall.h"
++#include "traps.h"
++#include "memlayout.h"
++#include "mmu.h"
++
++
++/*Stress Testing allocating large sized memory using anonymous mmap spanning across multiple pages..*/
++int
++main(int argc, char *argv[])
++{
++  
++  int size =  2*PGSIZE;
++
++  char *addr = (char*)0x4000;
++  char* r = mmap(addr, size,  0/*prot*/, 0/*flags*/, -1/*fd*/, 0/*offset*/);
++
++  if (r<=0)
++  {
++    printf(1, "XV6_TEST_OUTPUT : mmap failed\n");
++    exit();
++  }
++  
++  printf(1, "XV6_TEST_OUTPUT : mmap good\n");
++
++  memset(r, 'a', size - 1);
++  printf(1, "XV6_TEST_OUTPUT : strlen(r) = %d\n", strlen(r));
++
++  int rv = munmap(r, size);
++  if (rv < 0) 
++  {
++    printf(1, "XV6_TEST_OUTPUT : munmap failed\n");
++    exit();
++  }
++
++  printf(1, "XV6_TEST_OUTPUT : munmap good\n");
++  
++  exit();
++}
+diff -ruN src/user.h src-finished/user.h
+--- src/user.h	2022-07-22 20:42:54.320989515 +0000
++++ src-finished/user.h	2022-07-18 03:44:26.264990495 +0000
+@@ -23,6 +23,11 @@
+ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
++void*  kmalloc(uint);
++void  kmfree(void*);
++void *mmap(void *, int, int, int, int, int);
++int munmap(void *, uint);
++
+ 
+ // ulib.c
+ int stat(const char*, struct stat*);
+diff -ruN src/usys.S src-finished/usys.S
+--- src/usys.S	2022-07-22 20:42:52.284981907 +0000
++++ src-finished/usys.S	2022-07-18 03:53:02.195293706 +0000
+@@ -29,3 +29,7 @@
+ SYSCALL(sbrk)
+ SYSCALL(sleep)
+ SYSCALL(uptime)
++SYSCALL(kmalloc)
++SYSCALL(kmfree)
++SYSCALL(mmap)
++SYSCALL(munmap)
+diff -ruN src/vm.c src-finished/vm.c
+--- src/vm.c	2022-07-22 20:42:50.076973661 +0000
++++ src-finished/vm.c	2022-07-22 03:48:42.131548347 +0000
+@@ -6,7 +6,6 @@
+ #include "mmu.h"
+ #include "proc.h"
+ #include "elf.h"
+-
+ extern char data[];  // defined by kernel.ld
+ pde_t *kpgdir;  // for use in scheduler()
+ 
+@@ -229,15 +228,17 @@
+   if(newsz < oldsz)
+     return oldsz;
+ 
++  //creates a new page until the last page encompasses newsz address
+   a = PGROUNDUP(oldsz);
+   for(; a < newsz; a += PGSIZE){
+-    mem = kalloc();
++    mem = kalloc(); //allocate a new page (returns the virtual address )
+     if(mem == 0){
+       cprintf("allocuvm out of memory\n");
+       deallocuvm(pgdir, newsz, oldsz);
+       return 0;
+     }
+-    memset(mem, 0, PGSIZE);
++    memset(mem, 0, PGSIZE); // clear page memory
++    //in pgdir, set the memory from a to a + PGSIZE as mapping to location at mem
+     if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), PTE_W|PTE_U) < 0){
+       cprintf("allocuvm out of memory (2)\n");
+       deallocuvm(pgdir, newsz, oldsz);
+@@ -295,6 +296,8 @@
+     }
+   }
+   kfree((char*)pgdir);
++  free_mapped_mem(myproc()->mapped_mem);
++  myproc()->mapped_mem=0;
+ }
+ 
+ // Clear PTE_U on a page. Used to create an inaccessible
+@@ -385,6 +388,41 @@
+   return 0;
+ }
+ 
++// int
++// km_allockvm(pde_t *pgdir, uint oldsz, uint newsz)
++// {
++//   char *mem;
++//   uint a;
++//   uint vdata = (uint)P2V(data);
++//   newsz += vdata;
++//   oldsz +=vdata;
++
++//   if(newsz >= PHYSTOP)
++//     return 0;
++//   if(newsz < oldsz)
++//     return oldsz;
++
++//   //creates a new page until the last page encompasses newsz address
++//   a = PGROUNDUP(oldsz);
++//   for(; a < newsz; a += PGSIZE){
++//     mem = kalloc(); //allocate a new page (returns the virtual address )
++//     if(mem == 0){
++//       cprintf("allockvm out of memory\n");
++//       deallocuvm(pgdir, newsz, oldsz);
++//       return 0;
++//     }
++//     memset(mem, 0, PGSIZE); // clear page memory
++//     //in pgdir, set the memory from a to a + PGSIZE as mapping to location at mem
++//     if(mappages(pgdir, (char*)a, PGSIZE, V2P(mem), 0) < 0){
++//       cprintf("allockvm out of memory (2)\n");
++//       deallocuvm(pgdir, newsz, oldsz);
++//       kfree(mem);
++//       return 0;
++//     }
++//   }
++//   return newsz - vdata;
++// }
++
+ //PAGEBREAK!
+ // Blank page.
+ //PAGEBREAK!
