@@ -27,7 +27,8 @@ OBJS = \
 	uart.o\
 	vectors.o\
 	vm.o\
-	kmalloc.o
+	kmalloc.o\
+	mmap.o\
 
 # Cross-compiling (e.g., on Mac OS X)
 # TOOLPREFIX = i386-jos-elf
@@ -181,7 +182,6 @@ UPROGS=\
 	_stressfs\
 	_usertests\
 	_wc\
-	_test_1\
 	_zombie\
 
 fs.img: mkfs README $(UPROGS)

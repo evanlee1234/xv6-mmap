@@ -1,6 +1,4 @@
 make all --print-data-base --no-builtin-variables --no-builtin-rules --question
-make: *** No rule to make target 'all'.  Stop.
-
 # GNU Make 4.1
 # Built for x86_64-pc-linux-gnu
 # Copyright (C) 1988-2014 Free Software Foundation, Inc.
@@ -8,7 +6,7 @@ make: *** No rule to make target 'all'.  Stop.
 # This is free software: you are free to change and redistribute it.
 # There is NO WARRANTY, to the extent permitted by law.
 
-# Make data base, printed on Sun Jul 17 22:10:38 2022
+# Make data base, printed on Thu Jul 21 05:59:42 2022
 
 # Variables
 
@@ -22,8 +20,6 @@ make: *** No rule to make target 'all'.  Stop.
 VSCODE_AGENT_FOLDER = /root/.vscode-server
 # automatic
 ?D = $(patsubst %/,%,$(dir $?))
-# environment
-PLATFORMIO_IDE = 2.5.0
 # automatic
 @D = $(patsubst %/,%,$(dir $@))
 # automatic
@@ -51,9 +47,9 @@ LESSOPEN = | /usr/bin/lesspipe %s
 # environment
 VSCODE_CWD = /root
 # environment
-SSH_CONNECTION = 70.162.131.110 50492 172.104.192.33 22
+SSH_CONNECTION = 70.162.131.110 61019 172.104.192.33 22
 # environment
-NO_PROXY = 127.0.0.1
+PATH = /root/.vscode-server/bin/92d25e35d9bf1a6b16f7d0758f25d48ace11e5b9/bin/remote-cli:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
 # environment
 XDG_RUNTIME_DIR = /run/user/0
 # environment
@@ -63,13 +59,13 @@ ELECTRON_RUN_AS_NODE = 1
 # environment
 LS_COLORS = 
 # environment
-SSH_AUTH_SOCK = /run/user/0/vscode-ssh-auth-sock-889691147
+SSH_AUTH_SOCK = /run/user/0/vscode-ssh-auth-sock-147863148
 # automatic
 %F = $(notdir $%)
 # environment
 PWD = /mnt/aos/xv6-mmap
 # environment
-VSCODE_IPC_HOOK_CLI = /run/user/0/vscode-ipc-a0fb8afc-edc4-4a09-b43e-45f65d7e7855.sock
+VSCODE_IPC_HOOK_CLI = /run/user/0/vscode-ipc-75c62f50-0935-4420-b4c2-2326fac72abc.sock
 # automatic
 *D = $(patsubst %/,%,$(dir $*))
 # environment
@@ -90,18 +86,14 @@ VSCODE_HANDLES_UNCAUGHT_ERRORS = true
 ^D = $(patsubst %/,%,$(dir $^))
 # environment
 MAKELEVEL := 0
-# environment
-PLATFORMIO_PATH = /root/.platformio/penv/bin:/root/.platformio/penv:/root/.platformio/python3/bin:/root/.vscode-server/bin/92d25e35d9bf1a6b16f7d0758f25d48ace11e5b9/bin/remote-cli:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
 # default
 MAKE = $(MAKE_COMMAND)
 # default
 MAKECMDGOALS := all
 # environment
-PATH = /root/.vscode-server/bin/92d25e35d9bf1a6b16f7d0758f25d48ace11e5b9/bin/remote-cli:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
-# environment
 SHLVL = 3
 # environment
-XDG_SESSION_ID = 648
+XDG_SESSION_ID = 1
 # environment
 USER = root
 # makefile
@@ -119,7 +111,7 @@ MAKEFLAGS = pqrR
 # environment
 MFLAGS = -pqrR
 # environment
-SSH_CLIENT = 70.162.131.110 50492 22
+SSH_CLIENT = 70.162.131.110 61019 22
 # environment
 MAIL = /var/mail/root
 # automatic
@@ -135,8 +127,6 @@ MAKEFILES :=
 # automatic
 <F = $(notdir $<)
 # environment
-PLATFORMIO_CALLER = vscode
-# environment
 LC_ALL = C
 # automatic
 ^F = $(notdir $^)
@@ -151,7 +141,7 @@ MAKE_HOST := x86_64-pc-linux-gnu
 # environment
 LANG = C
 # variable set hash-table stats:
-# Load=69/1024=7%, Rehash=0, Collisions=9/91=10%
+# Load=65/1024=6%, Rehash=0, Collisions=8/87=9%
 
 # Pattern-specific Variable Values
 
@@ -217,6 +207,8 @@ GNUmakefile:
 # strcache performance: lookups = 21 / hit rate = 14%
 # hash-table stats:
 # Load=18/8192=0%, Rehash=0, Collisions=1/21=5%
-# Finished Make data base on Sun Jul 17 22:10:38 2022
+# Finished Make data base on Thu Jul 21 05:59:42 2022
 
  
+make: *** No rule to make target 'all'.  Stop.
+

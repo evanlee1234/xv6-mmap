@@ -115,6 +115,7 @@ found:
   p->context->eip = (uint)forkret;
 
   p->ksz = 0; //added to set the kernel size..
+  p->mapped_mem = (mem_block *) 0; 
 
   return p;
 }
@@ -203,6 +204,8 @@ fork(void)
   np->sz = curproc->sz;
   np->parent = curproc;
   *np->tf = *curproc->tf;
+
+  np->mapped_mem = curproc->mapped_mem;
 
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
@@ -535,13 +538,4 @@ procdump(void)
     }
     cprintf("\n");
   }
-}
-void *mmap(void *addr, int length, int prot, int flags, int fd,
-int offset){
-
-  return 0;
-}
-int munmap(void *addr, uint length){
-  
-  return 0;
 }

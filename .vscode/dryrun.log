@@ -1,7 +1,6 @@
-make --dry-run --keep-going --print-directory
+make --dry-run --always-make --keep-going --print-directory
 make: Entering directory '/mnt/aos/xv6-mmap'
+make: Leaving directory '/mnt/aos/xv6-mmap'
  
 make: *** No targets specified and no makefile found.  Stop.
 
-make: Leaving directory '/mnt/aos/xv6-mmap'
- 

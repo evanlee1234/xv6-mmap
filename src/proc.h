@@ -34,6 +34,20 @@ struct context {
 
 enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+
+typedef struct mappedmem {
+  void * start_address;
+  uint   length;
+  uint   capacity;
+  int    region_type; //0 for anon, 1 for file backed
+  uint   offset;
+  int    fd;
+  int    used;        //0 for unused (free), 1 for used
+  uint   flags;
+  uint   prot; 
+  struct mappedmem * next;
+} mem_block;
+
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)
@@ -50,15 +64,9 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  mem_block * mapped_mem;      // used for holding memblocks
 };
 
-typedef struct mappedmem {
-  char * start_address;
-  uint   length;
-  int    region_type; //0 for anon, 1 for file backed
-  uint   offset;
-  int    fd;
-} Mmemblock;
 
 // Process memory is laid out contiguously, low addresses first:
 //   text

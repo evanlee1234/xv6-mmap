@@ -6,7 +6,6 @@
 #include "mmu.h"
 #include "proc.h"
 #include "elf.h"
-
 extern char data[];  // defined by kernel.ld
 pde_t *kpgdir;  // for use in scheduler()
 
@@ -297,6 +296,8 @@ freevm(pde_t *pgdir)
     }
   }
   kfree((char*)pgdir);
+  free_mapped_mem(myproc()->mapped_mem);
+  myproc()->mapped_mem=0;
 }
 
 // Clear PTE_U on a page. Used to create an inaccessible
