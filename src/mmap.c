@@ -312,7 +312,7 @@ void * mmap(void *addr, int length, int prot, int flags, int fd, int offset){
     }
     curproc->sz = sz;
     switchuvm(curproc);
-    // print_all_memblocks(curproc->mapped_mem);
+    print_all_memblocks(curproc->mapped_mem);
     return (void *) closest_block->start_address;
 }
 int munmap(void *addr, uint length){
@@ -367,4 +367,14 @@ int munmap(void *addr, uint length){
     //only truly release memory if it's available
     try_free_lastblock(curproc);
     return 0;
+}
+
+
+mem_block * copy_mmap(struct mappedmem * root){
+    if (root == 0){
+        return 0;
+    }
+    mem_block * block = copy_memblock(root);
+    block->next = copy_mmap(root->next);
+    return block;
 }

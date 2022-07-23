@@ -127,6 +127,7 @@ void            yield(void);
 void *          mmap(void *, int, int, int, int, int);
 int             munmap(void *, uint);
 void            free_mapped_mem(struct mappedmem *);
+struct mappedmem *copy_mmap(struct mappedmem *);
 
 // swtch.S
 void            swtch(struct context**, struct context*);

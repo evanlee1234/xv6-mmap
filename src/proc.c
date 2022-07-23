@@ -205,7 +205,7 @@ fork(void)
   np->parent = curproc;
   *np->tf = *curproc->tf;
 
-  np->mapped_mem = curproc->mapped_mem;
+  np->mapped_mem = copy_mmap(curproc->mapped_mem);
 
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;

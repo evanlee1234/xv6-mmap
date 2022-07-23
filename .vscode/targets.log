@@ -1,4 +1,6 @@
 make all --print-data-base --no-builtin-variables --no-builtin-rules --question
+make: *** No rule to make target 'all'.  Stop.
+
 # GNU Make 4.1
 # Built for x86_64-pc-linux-gnu
 # Copyright (C) 1988-2014 Free Software Foundation, Inc.
@@ -6,7 +8,7 @@ make all --print-data-base --no-builtin-variables --no-builtin-rules --question
 # This is free software: you are free to change and redistribute it.
 # There is NO WARRANTY, to the extent permitted by law.
 
-# Make data base, printed on Thu Jul 21 05:59:42 2022
+# Make data base, printed on Sat Jul 23 23:40:34 2022
 
 # Variables
 
@@ -20,6 +22,8 @@ make all --print-data-base --no-builtin-variables --no-builtin-rules --question
 VSCODE_AGENT_FOLDER = /root/.vscode-server
 # automatic
 ?D = $(patsubst %/,%,$(dir $?))
+# environment
+PLATFORMIO_IDE = 2.5.0
 # automatic
 @D = $(patsubst %/,%,$(dir $@))
 # automatic
@@ -47,9 +51,9 @@ LESSOPEN = | /usr/bin/lesspipe %s
 # environment
 VSCODE_CWD = /root
 # environment
-SSH_CONNECTION = 70.162.131.110 61019 172.104.192.33 22
+SSH_CONNECTION = 70.162.131.110 51759 172.104.192.33 22
 # environment
-PATH = /root/.vscode-server/bin/92d25e35d9bf1a6b16f7d0758f25d48ace11e5b9/bin/remote-cli:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+NO_PROXY = 127.0.0.1
 # environment
 XDG_RUNTIME_DIR = /run/user/0
 # environment
@@ -59,13 +63,13 @@ ELECTRON_RUN_AS_NODE = 1
 # environment
 LS_COLORS = 
 # environment
-SSH_AUTH_SOCK = /run/user/0/vscode-ssh-auth-sock-147863148
+SSH_AUTH_SOCK = /run/user/0/vscode-ssh-auth-sock-246861659
 # automatic
 %F = $(notdir $%)
 # environment
 PWD = /mnt/aos/xv6-mmap
 # environment
-VSCODE_IPC_HOOK_CLI = /run/user/0/vscode-ipc-75c62f50-0935-4420-b4c2-2326fac72abc.sock
+VSCODE_IPC_HOOK_CLI = /run/user/0/vscode-ipc-739cccc6-6faa-4ab4-bc87-00fe0f43268c.sock
 # automatic
 *D = $(patsubst %/,%,$(dir $*))
 # environment
@@ -77,7 +81,7 @@ LESSCLOSE = /usr/bin/lesspipe %s %s
 # environment
 LOGNAME = root
 # environment
-APPLICATION_INSIGHTS_NO_DIAGNOSTIC_CHANNEL = 1
+APPLICATION_INSIGHTS_NO_DIAGNOSTIC_CHANNEL = true
 # automatic
 +F = $(notdir $+)
 # environment
@@ -86,14 +90,18 @@ VSCODE_HANDLES_UNCAUGHT_ERRORS = true
 ^D = $(patsubst %/,%,$(dir $^))
 # environment
 MAKELEVEL := 0
+# environment
+PLATFORMIO_PATH = /root/.platformio/python3/bin:/root/.vscode-server/bin/92d25e35d9bf1a6b16f7d0758f25d48ace11e5b9/bin/remote-cli:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
 # default
 MAKE = $(MAKE_COMMAND)
 # default
 MAKECMDGOALS := all
 # environment
+PATH = /root/.vscode-server/bin/92d25e35d9bf1a6b16f7d0758f25d48ace11e5b9/bin/remote-cli:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
+# environment
 SHLVL = 3
 # environment
-XDG_SESSION_ID = 1
+XDG_SESSION_ID = 597
 # environment
 USER = root
 # makefile
@@ -111,7 +119,7 @@ MAKEFLAGS = pqrR
 # environment
 MFLAGS = -pqrR
 # environment
-SSH_CLIENT = 70.162.131.110 61019 22
+SSH_CLIENT = 70.162.131.110 51759 22
 # environment
 MAIL = /var/mail/root
 # automatic
@@ -127,6 +135,8 @@ MAKEFILES :=
 # automatic
 <F = $(notdir $<)
 # environment
+PLATFORMIO_CALLER = vscode
+# environment
 LC_ALL = C
 # automatic
 ^F = $(notdir $^)
@@ -141,7 +151,7 @@ MAKE_HOST := x86_64-pc-linux-gnu
 # environment
 LANG = C
 # variable set hash-table stats:
-# Load=65/1024=6%, Rehash=0, Collisions=8/87=9%
+# Load=69/1024=7%, Rehash=0, Collisions=9/91=10%
 
 # Pattern-specific Variable Values
 
@@ -149,9 +159,9 @@ LANG = C
 
 # Directories
 
-# . (device 2080, inode 524401): 10 files, no impossibilities.
+# . (device 2080, inode 524401): 13 files, no impossibilities.
 
-# 10 files, no impossibilities in 1 directories.
+# 13 files, no impossibilities in 1 directories.
 
 # Implicit Rules
 
@@ -201,14 +211,12 @@ GNUmakefile:
 
 # No general ('VPATH' variable) search path.
 
-# strcache buffers: 1 (0) / strings = 18 / storage = 153 B / avg = 8 B
-# current buf: size = 8162 B / used = 153 B / count = 18 / avg = 8 B
+# strcache buffers: 1 (0) / strings = 21 / storage = 191 B / avg = 9 B
+# current buf: size = 8162 B / used = 191 B / count = 21 / avg = 9 B
 
-# strcache performance: lookups = 21 / hit rate = 14%
+# strcache performance: lookups = 24 / hit rate = 12%
 # hash-table stats:
-# Load=18/8192=0%, Rehash=0, Collisions=1/21=5%
-# Finished Make data base on Thu Jul 21 05:59:42 2022
+# Load=21/8192=0%, Rehash=0, Collisions=1/24=4%
+# Finished Make data base on Sat Jul 23 23:40:34 2022
 
  
-make: *** No rule to make target 'all'.  Stop.
-
